@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { createProjectile, renderScene } from '../lib/canvasScene'
+import {
+  createProjectile,
+  createStaticSceneBackground,
+  getSceneScale,
+  renderScene,
+  updateWaterSurfaceLayer,
+} from '../lib/canvasScene'
+
+const PROJECTILE_LIMIT = 48
+const WATER_SURFACE_FRAME_MS = 50
 
 function CanvasScene() {
   const canvasRef = useRef(null)
@@ -10,6 +19,8 @@ function CanvasScene() {
   const hitParticlesRef = useRef([])
   const projectilesRef = useRef([])
   const pointerRef = useRef({ x: 0, y: 0, active: false })
+  const staticBackgroundRef = useRef(null)
+  const waterSurfaceRef = useRef(null)
   const [isMusicPlaying, setIsMusicPlaying] = useState(false)
 
   useEffect(() => {
@@ -18,12 +29,14 @@ function CanvasScene() {
     let animationFrameId = 0
     let width = 0
     let height = 0
+    let pixelRatio = 1
     let previousTime = 0
+    let previousWaterSurfaceTime = -Infinity
 
     const resizeCanvas = () => {
-      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
       width = window.innerWidth
       height = window.innerHeight
+      pixelRatio = getCanvasPixelRatio(width, height)
 
       canvas.width = Math.floor(width * pixelRatio)
       canvas.height = Math.floor(height * pixelRatio)
@@ -31,6 +44,19 @@ function CanvasScene() {
       canvas.style.height = `${height}px`
 
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+      staticBackgroundRef.current = createStaticSceneBackground(width, height, pixelRatio)
+      waterSurfaceRef.current = updateWaterSurfaceLayer(
+        waterSurfaceRef.current,
+        width,
+        height,
+        pixelRatio,
+        previousTime,
+      )
+      previousWaterSurfaceTime = previousTime
+      ambientParticlesRef.current = []
+      bubblesRef.current = []
+      hitParticlesRef.current = []
+      projectilesRef.current = []
       pointerRef.current.x = pointerRef.current.active ? pointerRef.current.x : width / 2
       pointerRef.current.y = pointerRef.current.active ? pointerRef.current.y : height * 0.38
     }
@@ -61,11 +87,27 @@ function CanvasScene() {
           originY: height / 2,
           targetX: event.clientX,
           targetY: event.clientY,
+          scale: getSceneScale(width, height),
         }),
       )
+
+      if (projectilesRef.current.length > PROJECTILE_LIMIT) {
+        projectilesRef.current.splice(0, projectilesRef.current.length - PROJECTILE_LIMIT)
+      }
     }
 
     const animate = (time) => {
+      if (time - previousWaterSurfaceTime >= WATER_SURFACE_FRAME_MS) {
+        waterSurfaceRef.current = updateWaterSurfaceLayer(
+          waterSurfaceRef.current,
+          width,
+          height,
+          pixelRatio,
+          time,
+        )
+        previousWaterSurfaceTime = time
+      }
+
       renderScene(context, {
         width,
         height,
@@ -74,6 +116,8 @@ function CanvasScene() {
         bubbles: bubblesRef.current,
         hitParticles: hitParticlesRef.current,
         projectiles: projectilesRef.current,
+        staticBackground: staticBackgroundRef.current,
+        waterSurface: waterSurfaceRef.current,
         onBubbleHit: () => effectsAudioRef.current?.playBubblePop(),
         deltaTime: previousTime ? Math.min(time - previousTime, 32) : 16,
         time,
@@ -99,6 +143,7 @@ function CanvasScene() {
   useEffect(() => {
     return () => {
       audioRef.current?.stop()
+      audioRef.current?.close()
       effectsAudioRef.current?.close()
     }
   }, [])
@@ -126,6 +171,14 @@ function CanvasScene() {
       </button>
     </>
   )
+}
+
+function getCanvasPixelRatio(width, height) {
+  const devicePixelRatio = window.devicePixelRatio || 1
+  const cssPixels = width * height
+  const maxPixelRatio = cssPixels > 2_000_000 ? 1.25 : 1.5
+
+  return Math.min(devicePixelRatio, maxPixelRatio)
 }
 
 function createSoundEffects() {
@@ -229,12 +282,18 @@ function createPoolMusic() {
       if (audioContext.state === 'suspended') {
         await audioContext.resume()
       }
+      window.clearInterval(intervalId)
       playNote()
       intervalId = window.setInterval(playNote, 520)
     },
     stop() {
       window.clearInterval(intervalId)
       intervalId = 0
+    },
+    close() {
+      window.clearInterval(intervalId)
+      intervalId = 0
+      audioContext.close()
     },
   }
 }

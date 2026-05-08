@@ -11,6 +11,7 @@ const HIT_PARTICLE_LIMIT = 80
 const PROJECTILE_MARGIN = 90
 const PROJECTILE_SPEED = 0.48
 const PROJECTILE_LIFETIME = 5200
+const BASE_SCENE_SIZE = 760
 
 export function renderScene(context, scene) {
   const {
@@ -22,9 +23,12 @@ export function renderScene(context, scene) {
     hitParticles,
     onBubbleHit,
     projectiles,
+    staticBackground,
+    waterSurface,
     deltaTime,
     time,
   } = scene
+  const sceneScale = getSceneScale(width, height)
   const center = {
     x: width / 2,
     y: height / 2,
@@ -32,41 +36,95 @@ export function renderScene(context, scene) {
   const towerAngle = Math.atan2(pointer.y - center.y, pointer.x - center.x)
   const pool = getPoolBounds(width, height)
 
-  clearScene(context, width, height)
-  drawSunlitDeck(context, width, height)
-  drawPoolBasin(context, pool)
-  drawWaterSurface(context, pool, time)
-  updateAmbientParticles(ambientParticles, pool, deltaTime)
-  drawAmbientParticles(context, ambientParticles, pool, time)
-  updateBubbles(bubbles, width, height, deltaTime)
+  drawSceneBackground(context, width, height, pool, staticBackground)
+  drawWaterSurfaceLayer(context, width, height, pool, waterSurface, time)
+  updateAmbientParticles(ambientParticles, pool, deltaTime, sceneScale)
+  drawAmbientParticles(context, ambientParticles, pool, time, sceneScale)
+  updateBubbles(bubbles, width, height, deltaTime, sceneScale)
   updateProjectiles(projectiles, width, height, deltaTime)
-  resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbleHit)
+  resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbleHit, sceneScale)
   updateHitParticles(hitParticles, deltaTime)
-  drawLotusDecorations(context, pool, time)
-  drawTower(context, center.x, center.y, towerAngle)
-  drawBubbles(context, bubbles, pool)
+  drawLotusDecorations(context, pool, time, sceneScale)
+  drawTower(context, center.x, center.y, towerAngle, sceneScale)
+  drawBubbles(context, bubbles, pool, sceneScale)
   drawProjectiles(context, projectiles, pool)
-  drawHitParticles(context, hitParticles, pool)
+  drawHitParticles(context, hitParticles, pool, sceneScale)
 }
 
-export function createProjectile({ originX, originY, targetX, targetY }) {
+export function createStaticSceneBackground(width, height, pixelRatio) {
+  const background = document.createElement('canvas')
+  const backgroundContext = background.getContext('2d')
+  const pool = getPoolBounds(width, height)
+
+  background.width = Math.floor(width * pixelRatio)
+  background.height = Math.floor(height * pixelRatio)
+  backgroundContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+  drawSunlitDeck(backgroundContext, width, height)
+  drawPoolBasin(backgroundContext, pool)
+
+  return background
+}
+
+export function updateWaterSurfaceLayer(layer, width, height, pixelRatio, time) {
+  const waterSurface = layer || document.createElement('canvas')
+  const waterSurfaceContext = waterSurface.getContext('2d')
+  const scaledWidth = Math.floor(width * pixelRatio)
+  const scaledHeight = Math.floor(height * pixelRatio)
+
+  if (waterSurface.width !== scaledWidth || waterSurface.height !== scaledHeight) {
+    waterSurface.width = scaledWidth
+    waterSurface.height = scaledHeight
+  }
+
+  waterSurfaceContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+  clearScene(waterSurfaceContext, width, height)
+  drawWaterSurface(waterSurfaceContext, getPoolBounds(width, height), time)
+
+  return waterSurface
+}
+
+export function createProjectile({ originX, originY, targetX, targetY, scale = 1 }) {
   const angle = Math.atan2(targetY - originY, targetX - originX)
-  const muzzleOffset = 62
+  const muzzleOffset = 62 * scale
 
   return {
     x: originX + Math.cos(angle) * muzzleOffset,
     y: originY + Math.sin(angle) * muzzleOffset,
-    vx: Math.cos(angle) * PROJECTILE_SPEED,
-    vy: Math.sin(angle) * PROJECTILE_SPEED,
-    radius: 9,
+    vx: Math.cos(angle) * PROJECTILE_SPEED * scale,
+    vy: Math.sin(angle) * PROJECTILE_SPEED * scale,
+    radius: 9 * scale,
     age: 0,
     lifetime: PROJECTILE_LIFETIME,
     wobble: Math.random() * Math.PI * 2,
   }
 }
 
+export function getSceneScale(width, height) {
+  return clamp(Math.min(width, height) / BASE_SCENE_SIZE, 0.56, 1.08)
+}
+
 function clearScene(context, width, height) {
   context.clearRect(0, 0, width, height)
+}
+
+function drawSceneBackground(context, width, height, pool, staticBackground) {
+  if (staticBackground) {
+    context.drawImage(staticBackground, 0, 0, width, height)
+    return
+  }
+
+  clearScene(context, width, height)
+  drawSunlitDeck(context, width, height)
+  drawPoolBasin(context, pool)
+}
+
+function drawWaterSurfaceLayer(context, width, height, pool, waterSurface, time) {
+  if (waterSurface) {
+    context.drawImage(waterSurface, 0, 0, width, height)
+    return
+  }
+
+  drawWaterSurface(context, pool, time)
 }
 
 function drawSunlitDeck(context, width, height) {
@@ -305,9 +363,9 @@ function drawWaterCaustics(context, pool, time) {
   context.restore()
 }
 
-function updateAmbientParticles(particles, pool, deltaTime) {
+function updateAmbientParticles(particles, pool, deltaTime, sceneScale) {
   while (particles.length < AMBIENT_PARTICLE_LIMIT) {
-    particles.push(createAmbientParticle(pool))
+    particles.push(createAmbientParticle(pool, sceneScale))
   }
 
   for (const particle of particles) {
@@ -318,23 +376,23 @@ function updateAmbientParticles(particles, pool, deltaTime) {
 
     if (
       particle.age > particle.lifetime ||
-      particle.x < pool.x - 24 ||
-      particle.x > pool.x + pool.width + 24 ||
-      particle.y < pool.y - 24 ||
-      particle.y > pool.y + pool.height + 24
+      particle.x < pool.x - 24 * sceneScale ||
+      particle.x > pool.x + pool.width + 24 * sceneScale ||
+      particle.y < pool.y - 24 * sceneScale ||
+      particle.y > pool.y + pool.height + 24 * sceneScale
     ) {
-      Object.assign(particle, createAmbientParticle(pool))
+      Object.assign(particle, createAmbientParticle(pool, sceneScale))
     }
   }
 }
 
-function createAmbientParticle(pool) {
+function createAmbientParticle(pool, sceneScale) {
   return {
     x: randomBetween(pool.x, pool.x + pool.width),
     y: randomBetween(pool.y, pool.y + pool.height),
     vx: randomBetween(-0.012, 0.012),
     vy: randomBetween(-0.018, -0.004),
-    radius: randomBetween(1.2, 3.4),
+    radius: randomBetween(1.2, 3.4) * sceneScale,
     alpha: randomBetween(0.18, 0.42),
     age: 0,
     lifetime: randomBetween(3600, 7600),
@@ -343,12 +401,12 @@ function createAmbientParticle(pool) {
   }
 }
 
-function drawAmbientParticles(context, particles, pool, time) {
+function drawAmbientParticles(context, particles, pool, time, sceneScale) {
   context.save()
   roundedRect(context, pool.x, pool.y, pool.width, pool.height, 22)
   context.clip()
   context.shadowColor = 'rgba(255, 255, 255, 0.78)'
-  context.shadowBlur = 8
+  context.shadowBlur = 8 * sceneScale
 
   for (const particle of particles) {
     const alpha = particle.alpha * (0.64 + Math.sin(particle.pulse + time * 0.001) * 0.28)
@@ -362,9 +420,9 @@ function drawAmbientParticles(context, particles, pool, time) {
   context.restore()
 }
 
-function updateBubbles(bubbles, width, height, deltaTime) {
+function updateBubbles(bubbles, width, height, deltaTime, sceneScale) {
   if (bubbles.length < BUBBLE_LIMIT && Math.random() < 0.035) {
-    bubbles.push(createBubbleFromEdge(width, height))
+    bubbles.push(createBubbleFromEdge(width, height, sceneScale))
   }
 
   for (const bubble of bubbles) {
@@ -373,14 +431,14 @@ function updateBubbles(bubbles, width, height, deltaTime) {
     bubble.wobble += deltaTime * bubble.wobbleSpeed
   }
 
-  resolveBubbleCollisions(bubbles)
-  removeOutOfBoundsBubbles(bubbles, width, height)
+  resolveBubbleCollisions(bubbles, sceneScale)
+  removeOutOfBoundsBubbles(bubbles, width, height, sceneScale)
 }
 
-function createBubbleFromEdge(width, height) {
-  const radius = randomBetween(BUBBLE_RADIUS_MIN, BUBBLE_RADIUS_MAX)
+function createBubbleFromEdge(width, height, sceneScale) {
+  const radius = randomBetween(BUBBLE_RADIUS_MIN, BUBBLE_RADIUS_MAX) * sceneScale
   const side = Math.floor(Math.random() * 4)
-  const speed = randomBetween(BUBBLE_MIN_SPEED, BUBBLE_MAX_SPEED)
+  const speed = randomBetween(BUBBLE_MIN_SPEED, BUBBLE_MAX_SPEED) * sceneScale
   const targetX = randomBetween(width * 0.14, width * 0.86)
   const targetY = randomBetween(height * 0.14, height * 0.86)
   let x
@@ -415,7 +473,7 @@ function createBubbleFromEdge(width, height) {
   }
 }
 
-function resolveBubbleCollisions(bubbles) {
+function resolveBubbleCollisions(bubbles, sceneScale) {
   for (let index = 0; index < bubbles.length; index += 1) {
     for (let nextIndex = index + 1; nextIndex < bubbles.length; nextIndex += 1) {
       const first = bubbles[index]
@@ -423,7 +481,7 @@ function resolveBubbleCollisions(bubbles) {
       const dx = second.x - first.x
       const dy = second.y - first.y
       const distance = Math.hypot(dx, dy) || 1
-      const minDistance = first.radius + second.radius + 4
+      const minDistance = first.radius + second.radius + 4 * sceneScale
 
       if (distance >= minDistance) {
         continue
@@ -438,36 +496,38 @@ function resolveBubbleCollisions(bubbles) {
       second.x += nx * overlap
       second.y += ny * overlap
 
-      const push = 0.0008
+      const push = 0.0008 * sceneScale
       first.vx -= nx * push
       first.vy -= ny * push
       second.vx += nx * push
       second.vy += ny * push
-      clampBubbleSpeed(first)
-      clampBubbleSpeed(second)
+      clampBubbleSpeed(first, sceneScale)
+      clampBubbleSpeed(second, sceneScale)
     }
   }
 }
 
-function clampBubbleSpeed(bubble) {
+function clampBubbleSpeed(bubble, sceneScale) {
   const speed = Math.hypot(bubble.vx, bubble.vy)
+  const maxSpeed = BUBBLE_MAX_SPEED * sceneScale
 
-  if (speed <= BUBBLE_MAX_SPEED) {
+  if (speed <= maxSpeed) {
     return
   }
 
-  bubble.vx = (bubble.vx / speed) * BUBBLE_MAX_SPEED
-  bubble.vy = (bubble.vy / speed) * BUBBLE_MAX_SPEED
+  bubble.vx = (bubble.vx / speed) * maxSpeed
+  bubble.vy = (bubble.vy / speed) * maxSpeed
 }
 
-function removeOutOfBoundsBubbles(bubbles, width, height) {
+function removeOutOfBoundsBubbles(bubbles, width, height, sceneScale) {
   for (let index = bubbles.length - 1; index >= 0; index -= 1) {
     const bubble = bubbles[index]
+    const margin = BUBBLE_MARGIN * sceneScale
     const isOutside =
-      bubble.x < -BUBBLE_MARGIN ||
-      bubble.x > width + BUBBLE_MARGIN ||
-      bubble.y < -BUBBLE_MARGIN ||
-      bubble.y > height + BUBBLE_MARGIN
+      bubble.x < -margin ||
+      bubble.x > width + margin ||
+      bubble.y < -margin ||
+      bubble.y > height + margin
 
     if (isOutside) {
       bubbles.splice(index, 1)
@@ -475,7 +535,7 @@ function removeOutOfBoundsBubbles(bubbles, width, height) {
   }
 }
 
-function drawBubbles(context, bubbles, pool) {
+function drawBubbles(context, bubbles, pool, sceneScale) {
   context.save()
   roundedRect(context, pool.x, pool.y, pool.width, pool.height, 22)
   context.clip()
@@ -483,7 +543,7 @@ function drawBubbles(context, bubbles, pool) {
   for (const bubble of bubbles) {
     context.save()
     context.shadowColor = `rgba(186, 246, 255, ${bubble.alpha * 0.9})`
-    context.shadowBlur = 14
+    context.shadowBlur = 14 * sceneScale
 
     const highlightOffset = bubble.radius * 0.36
     const gradient = context.createRadialGradient(
@@ -501,7 +561,7 @@ function drawBubbles(context, bubbles, pool) {
 
     context.fillStyle = gradient
     context.strokeStyle = `rgba(255, 255, 255, ${bubble.alpha})`
-    context.lineWidth = 2
+    context.lineWidth = 2 * sceneScale
     context.beginPath()
     context.arc(bubble.x, bubble.y, bubble.radius, 0, Math.PI * 2)
     context.fill()
@@ -602,7 +662,7 @@ function drawProjectiles(context, projectiles, pool) {
   context.restore()
 }
 
-function resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbleHit) {
+function resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbleHit, sceneScale) {
   for (let projectileIndex = projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
     const projectile = projectiles[projectileIndex]
 
@@ -616,7 +676,7 @@ function resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbl
         continue
       }
 
-      createHitParticles(hitParticles, bubble.x, bubble.y, bubble.radius)
+      createHitParticles(hitParticles, bubble.x, bubble.y, bubble.radius, sceneScale)
       bubbles.splice(bubbleIndex, 1)
       projectiles.splice(projectileIndex, 1)
       onBubbleHit?.()
@@ -625,19 +685,19 @@ function resolveProjectileBubbleHits(projectiles, bubbles, hitParticles, onBubbl
   }
 }
 
-function createHitParticles(hitParticles, x, y, radius) {
+function createHitParticles(hitParticles, x, y, radius, sceneScale) {
   const particleCount = Math.min(12, Math.max(8, Math.round(radius * 0.34)))
 
   for (let index = 0; index < particleCount; index += 1) {
     const angle = (Math.PI * 2 * index) / particleCount + randomBetween(-0.22, 0.22)
-    const speed = randomBetween(0.08, 0.18)
+    const speed = randomBetween(0.08, 0.18) * sceneScale
 
     hitParticles.push({
       x,
       y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      radius: randomBetween(2, 4.5),
+      radius: randomBetween(2, 4.5) * sceneScale,
       age: 0,
       lifetime: randomBetween(360, 560),
       hue: randomBetween(190, 205),
@@ -664,7 +724,7 @@ function updateHitParticles(hitParticles, deltaTime) {
   }
 }
 
-function drawHitParticles(context, hitParticles, pool) {
+function drawHitParticles(context, hitParticles, pool, sceneScale) {
   context.save()
   roundedRect(context, pool.x, pool.y, pool.width, pool.height, 22)
   context.clip()
@@ -673,10 +733,10 @@ function drawHitParticles(context, hitParticles, pool) {
     const alpha = Math.max(0, 1 - particle.age / particle.lifetime)
 
     context.shadowColor = `hsla(${particle.hue}, 96%, 78%, ${alpha})`
-    context.shadowBlur = 10
+    context.shadowBlur = 10 * sceneScale
     context.fillStyle = `rgba(255, 255, 255, ${alpha * 0.9})`
     context.strokeStyle = `rgba(125, 211, 252, ${alpha * 0.7})`
-    context.lineWidth = 1.5
+    context.lineWidth = 1.5 * sceneScale
     context.beginPath()
     context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2)
     context.fill()
@@ -686,25 +746,25 @@ function drawHitParticles(context, hitParticles, pool) {
   context.restore()
 }
 
-function drawLotusDecorations(context, pool, time) {
-  const sway = Math.sin(time * 0.0012) * 3
+function drawLotusDecorations(context, pool, time, sceneScale) {
+  const sway = Math.sin(time * 0.0012) * 3 * sceneScale
 
-  drawLilyPad(context, pool.x + pool.width * 0.17, pool.y + pool.height * 0.24 + sway, 44, -0.4)
-  drawLotusFlower(context, pool.x + pool.width * 0.25, pool.y + pool.height * 0.3 - sway, 26)
-  drawLilyPad(context, pool.x + pool.width * 0.78, pool.y + pool.height * 0.22 - sway, 52, 0.3)
-  drawLotusSeedPod(context, pool.x + pool.width * 0.72, pool.y + pool.height * 0.32 + sway, 22)
-  drawLilyPad(context, pool.x + pool.width * 0.15, pool.y + pool.height * 0.78 - sway, 58, 0.55)
-  drawLotusFlower(context, pool.x + pool.width * 0.84, pool.y + pool.height * 0.72 + sway, 30)
+  drawLilyPad(context, pool.x + pool.width * 0.17, pool.y + pool.height * 0.24 + sway, 44 * sceneScale, -0.4, sceneScale)
+  drawLotusFlower(context, pool.x + pool.width * 0.25, pool.y + pool.height * 0.3 - sway, 26 * sceneScale, sceneScale)
+  drawLilyPad(context, pool.x + pool.width * 0.78, pool.y + pool.height * 0.22 - sway, 52 * sceneScale, 0.3, sceneScale)
+  drawLotusSeedPod(context, pool.x + pool.width * 0.72, pool.y + pool.height * 0.32 + sway, 22 * sceneScale, sceneScale)
+  drawLilyPad(context, pool.x + pool.width * 0.15, pool.y + pool.height * 0.78 - sway, 58 * sceneScale, 0.55, sceneScale)
+  drawLotusFlower(context, pool.x + pool.width * 0.84, pool.y + pool.height * 0.72 + sway, 30 * sceneScale, sceneScale)
 }
 
-function drawLilyPad(context, x, y, radius, rotation) {
+function drawLilyPad(context, x, y, radius, rotation, sceneScale) {
   context.save()
   context.translate(x, y)
   context.rotate(rotation)
 
   context.fillStyle = '#4ade80'
   context.strokeStyle = '#15803d'
-  context.lineWidth = 3
+  context.lineWidth = 3 * sceneScale
   context.beginPath()
   context.arc(0, 0, radius, 0.28, Math.PI * 1.9)
   context.lineTo(0, 0)
@@ -713,7 +773,7 @@ function drawLilyPad(context, x, y, radius, rotation) {
   context.stroke()
 
   context.strokeStyle = 'rgba(255, 255, 255, 0.32)'
-  context.lineWidth = 2
+  context.lineWidth = 2 * sceneScale
   for (let angle = 0.45; angle < Math.PI * 1.78; angle += 0.55) {
     context.beginPath()
     context.moveTo(0, 0)
@@ -724,7 +784,7 @@ function drawLilyPad(context, x, y, radius, rotation) {
   context.restore()
 }
 
-function drawLotusFlower(context, x, y, size) {
+function drawLotusFlower(context, x, y, size, sceneScale) {
   context.save()
   context.translate(x, y)
 
@@ -742,7 +802,7 @@ function drawLotusFlower(context, x, y, size) {
     context.rotate(rotation)
     context.fillStyle = '#f9a8d4'
     context.strokeStyle = '#f472b6'
-    context.lineWidth = 2
+    context.lineWidth = 2 * sceneScale
     context.beginPath()
     context.ellipse(0, 0, size * 0.32, size * 0.62, 0, 0, Math.PI * 2)
     context.fill()
@@ -758,13 +818,13 @@ function drawLotusFlower(context, x, y, size) {
   context.restore()
 }
 
-function drawLotusSeedPod(context, x, y, size) {
+function drawLotusSeedPod(context, x, y, size, sceneScale) {
   context.save()
   context.translate(x, y)
 
   context.fillStyle = '#bef264'
   context.strokeStyle = '#65a30d'
-  context.lineWidth = 3
+  context.lineWidth = 3 * sceneScale
   context.beginPath()
   context.ellipse(0, 0, size * 0.88, size * 0.68, -0.2, 0, Math.PI * 2)
   context.fill()
@@ -782,9 +842,10 @@ function drawLotusSeedPod(context, x, y, size) {
   context.restore()
 }
 
-function drawTower(context, x, y, angle) {
+function drawTower(context, x, y, angle, sceneScale) {
   context.save()
   context.translate(x, y)
+  context.scale(sceneScale, sceneScale)
 
   drawTowerBase(context)
   drawTowerHead(context, angle)
@@ -896,4 +957,8 @@ function roundedRect(context, x, y, width, height, radius) {
 
 function randomBetween(min, max) {
   return min + Math.random() * (max - min)
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value))
 }
